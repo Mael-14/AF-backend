@@ -1,0 +1,61 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper function to check if user owns the document
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Users collection
+    match /users/{userId} {
+      // Users can read their own profile
+      allow read: if isOwner(userId);
+      // Users can update their own profile
+      allow update: if isOwner(userId);
+      // Only backend can create users (via Admin SDK)
+      allow create: if false;
+    }
+    
+    // Rooms collection
+    match /rooms/{roomId} {
+      // Anyone can read active/pending rooms (for joining)
+      allow read: if resource.data.status in ['pending', 'active'];
+      // Host can update their room
+      allow update: if isAuthenticated() && 
+                     request.auth.uid == resource.data.hostId;
+      // Authenticated users can create rooms
+      allow create: if isAuthenticated();
+    }
+    
+    // Games collection
+    match /games/{gameId} {
+      // Anyone can read games
+      allow read: if true;
+      // Only backend can create/update games (via Admin SDK)
+      allow write: if false;
+    }
+    
+    // Friendships collection
+    match /friendships/{friendshipId} {
+      // Users can read friendships they're part of
+      allow read: if isAuthenticated() && 
+                   request.auth.uid in resource.data.users;
+      // Users can create friend requests
+      allow create: if isAuthenticated() && 
+                     request.auth.uid == request.resource.data.requestedBy;
+      // Users can update friendships they're part of (to accept)
+      allow update: if isAuthenticated() && 
+                     request.auth.uid in resource.data.users;
+      // Users can delete friendships they're part of
+      allow delete: if isAuthenticated() && 
+                      request.auth.uid in resource.data.users;
+    }
+  }
+}
+

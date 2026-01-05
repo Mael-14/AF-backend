@@ -1,0 +1,8 @@
+{
+  "watch": ["server.js", "routes", "services", "middleware", "socket"],
+  "ignore": ["*.ps1", "*.md", "*.txt", "*.json", "node_modules", ".evn", ".env"],
+  "ext": "js,json",
+  "exec": "node server.js",
+  "verbose": true
+}
+
