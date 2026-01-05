@@ -76,7 +76,7 @@ app.use((req, res) => {
   });
 });
 
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 3000;
 
 // Listen on all network interfaces (0.0.0.0) to allow connections from other devices
 server.listen(PORT, '0.0.0.0', () => {
