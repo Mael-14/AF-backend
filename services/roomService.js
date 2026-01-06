@@ -45,16 +45,6 @@ const createRoom = async (roomData) => {
     code = generateRoomCode();
   }
 
-  // Fetch the game to get questions
-  const gameDoc = await db.collection(COLLECTIONS.GAMES).doc(roomData.gameId).get();
-  
-  if (!gameDoc.exists) {
-    throw new Error('Game not found');
-  }
-
-  const gameData = gameDoc.data();
-  const gameQuestions = gameData.questions || [];
-
   const room = {
     id: uuidv4(),
     code: code,
@@ -74,7 +64,7 @@ const createRoom = async (roomData) => {
     selectedFriends: roomData.selectedFriends || [],
     status: 'pending', // pending, active, completed, terminated
     currentQuestion: null,
-    questions: gameQuestions, // Load questions from game
+    questions: [],
     votes: {},
     currentPlayerTurn: null,
     answers: {},
@@ -239,27 +229,12 @@ const startRoom = async (roomId) => {
     throw new Error('Need at least 2 players to start');
   }
 
-  // If questions are empty, fetch them from the game
-  let questions = room.questions || [];
-  if (questions.length === 0) {
-    const gameDoc = await db.collection(COLLECTIONS.GAMES).doc(room.gameId).get();
-    if (gameDoc.exists) {
-      const gameData = gameDoc.data();
-      questions = gameData.questions || [];
-    }
-  }
-
-  // Set first question as current question when starting
-  const firstQuestion = questions.length > 0 ? questions[0] : null;
-
   await db.collection(COLLECTIONS.ROOMS).doc(roomId).update({
     status: 'active',
-    questions: questions,
-    currentQuestion: firstQuestion,
     updatedAt: new Date().toISOString()
   });
 
-  return { ...room, status: 'active', questions, currentQuestion: firstQuestion };
+  return { ...room, status: 'active' };
 };
 
 /**
@@ -316,6 +291,71 @@ const getUserRooms = async (userId) => {
   return userRooms;
 };
 
+/**
+ * Submit a vote for a question
+ */
+const submitVote = async (roomId, userId, questionId) => {
+  const db = getDb();
+  const room = await getRoomById(roomId);
+
+  if (!room) {
+    throw new Error('Room not found');
+  }
+
+  // Initialize votes object if it doesn't exist
+  const votes = room.votes || {};
+  
+  // Initialize question votes array if it doesn't exist
+  if (!votes[questionId]) {
+    votes[questionId] = [];
+  }
+
+  // Check if user already voted for this question
+  if (votes[questionId].includes(userId)) {
+    throw new Error('You have already voted for this question');
+  }
+
+  // Add user vote
+  votes[questionId].push(userId);
+
+  await db.collection(COLLECTIONS.ROOMS).doc(roomId).update({
+    votes: votes,
+    updatedAt: new Date().toISOString()
+  });
+
+  return { ...room, votes };
+};
+
+/**
+ * Submit an answer (current player only)
+ */
+const submitAnswer = async (roomId, userId, answer, questionId) => {
+  const db = getDb();
+  const room = await getRoomById(roomId);
+
+  if (!room) {
+    throw new Error('Room not found');
+  }
+
+  // Verify it's the current player's turn
+  if (room.currentPlayerTurn !== userId) {
+    throw new Error('It is not your turn to answer');
+  }
+
+  // Initialize answers object if it doesn't exist
+  const answers = room.answers || {};
+  
+  // Store answer
+  answers[userId] = answer;
+
+  await db.collection(COLLECTIONS.ROOMS).doc(roomId).update({
+    answers: answers,
+    updatedAt: new Date().toISOString()
+  });
+
+  return { ...room, answers };
+};
+
 module.exports = {
   createRoom,
   getRoomByCode,
@@ -327,6 +367,10 @@ module.exports = {
   startRoom,
   setPlayerTurn,
   getUserRooms,
-  generateRoomCode
+  generateRoomCode,
+  submitVote,
+  submitAnswer
 };
+
+
 
