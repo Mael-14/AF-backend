@@ -45,6 +45,16 @@ const createRoom = async (roomData) => {
     code = generateRoomCode();
   }
 
+  // Fetch the game to get questions
+  const gameDoc = await db.collection(COLLECTIONS.GAMES).doc(roomData.gameId).get();
+  
+  if (!gameDoc.exists) {
+    throw new Error('Game not found');
+  }
+
+  const gameData = gameDoc.data();
+  const gameQuestions = gameData.questions || [];
+
   const room = {
     id: uuidv4(),
     code: code,
@@ -64,7 +74,7 @@ const createRoom = async (roomData) => {
     selectedFriends: roomData.selectedFriends || [],
     status: 'pending', // pending, active, completed, terminated
     currentQuestion: null,
-    questions: [],
+    questions: gameQuestions, // Load questions from game
     votes: {},
     currentPlayerTurn: null,
     answers: {},
@@ -229,12 +239,27 @@ const startRoom = async (roomId) => {
     throw new Error('Need at least 2 players to start');
   }
 
+  // If questions are empty, fetch them from the game
+  let questions = room.questions || [];
+  if (questions.length === 0) {
+    const gameDoc = await db.collection(COLLECTIONS.GAMES).doc(room.gameId).get();
+    if (gameDoc.exists) {
+      const gameData = gameDoc.data();
+      questions = gameData.questions || [];
+    }
+  }
+
+  // Set first question as current question when starting
+  const firstQuestion = questions.length > 0 ? questions[0] : null;
+
   await db.collection(COLLECTIONS.ROOMS).doc(roomId).update({
     status: 'active',
+    questions: questions,
+    currentQuestion: firstQuestion,
     updatedAt: new Date().toISOString()
   });
 
-  return { ...room, status: 'active' };
+  return { ...room, status: 'active', questions, currentQuestion: firstQuestion };
 };
 
 /**
