@@ -2,16 +2,26 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
-require('dotenv').config({ path: '.env' });
+require('dotenv').config({ path: '.evn' });
 
 const app = express();
 const server = http.createServer(app);
 
-// CORS configuration - Allow all origins in development for mobile testing
+// CORS configuration - Allow all origins for mobile testing
 const corsOrigins = process.env.CORS_ORIGIN?.split(',') || ['*'];
 const corsConfig = corsOrigins.includes('*') 
-  ? { origin: true, credentials: true } // Allow all origins
-  : { origin: corsOrigins, credentials: true };
+  ? { 
+      origin: true, // Allow all origins
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
+    }
+  : { 
+      origin: corsOrigins, 
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
+    };
 
 // Initialize Socket.IO with CORS
 const io = socketIo(server, {
@@ -91,4 +101,6 @@ server.listen(PORT, '0.0.0.0', () => {
 });
 
 module.exports = { app, server, io };
+
+
 
