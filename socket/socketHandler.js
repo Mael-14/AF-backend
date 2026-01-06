@@ -84,10 +84,11 @@ const initialize = (io) => {
           room: room
         });
 
-        // Send current room state to the joining user
+        // Send current room state to the joining user (including questions)
         socket.emit('room_state', {
           room: room,
           players: room.players,
+          questions: room.questions || [],
           currentQuestion: room.currentQuestion,
           currentPlayerTurn: room.currentPlayerTurn
         });
@@ -123,6 +124,41 @@ const initialize = (io) => {
         console.log(`👤 ${socket.userId} left room ${roomId}`);
       } catch (error) {
         console.error('Error leaving room:', error);
+        socket.emit('error', { message: error.message });
+      }
+    });
+
+    /**
+     * Start game - broadcasts to all players with questions
+     */
+    socket.on('start_game', async (data) => {
+      try {
+        const { roomId } = data;
+        const room = await roomService.getRoomById(roomId);
+
+        if (!room) {
+          socket.emit('error', { message: 'Room not found' });
+          return;
+        }
+
+        if (room.hostId !== socket.userId) {
+          socket.emit('error', { message: 'Only host can start the game' });
+          return;
+        }
+
+        // Start the room (this also loads questions if needed)
+        const updatedRoom = await roomService.startRoom(roomId);
+
+        // Broadcast game start to all players with questions
+        io.to(`room:${roomId}`).emit('game_started', {
+          room: updatedRoom,
+          questions: updatedRoom.questions || [],
+          currentQuestion: updatedRoom.currentQuestion
+        });
+
+        console.log(`🎮 Game started in room ${roomId}`);
+      } catch (error) {
+        console.error('Error starting game:', error);
         socket.emit('error', { message: error.message });
       }
     });
@@ -266,6 +302,62 @@ const initialize = (io) => {
     });
 
     /**
+     * Next question (host only)
+     */
+    socket.on('next_question', async (data) => {
+      try {
+        const { roomId } = data;
+        const room = await roomService.getRoomById(roomId);
+
+        if (!room) {
+          socket.emit('error', { message: 'Room not found' });
+          return;
+        }
+
+        if (room.hostId !== socket.userId) {
+          socket.emit('error', { message: 'Only host can change questions' });
+          return;
+        }
+
+        const questions = room.questions || [];
+        const currentQuestion = room.currentQuestion;
+        
+        if (questions.length === 0) {
+          socket.emit('error', { message: 'No questions available' });
+          return;
+        }
+
+        // Find current question index
+        let currentIndex = -1;
+        if (currentQuestion) {
+          currentIndex = questions.findIndex(q => q.id === currentQuestion.id);
+        }
+
+        // Get next question
+        const nextIndex = (currentIndex + 1) % questions.length;
+        const nextQuestion = questions[nextIndex];
+
+        const { getDb } = require('../services/firebaseService');
+        const db = getDb();
+
+        await db.collection('rooms').doc(roomId).update({
+          currentQuestion: nextQuestion,
+          updatedAt: new Date().toISOString()
+        });
+
+        // Broadcast next question to all players
+        io.to(`room:${roomId}`).emit('question_changed', {
+          question: nextQuestion
+        });
+
+        console.log(`➡️ Next question set in room ${roomId}`);
+      } catch (error) {
+        console.error('Error setting next question:', error);
+        socket.emit('error', { message: error.message });
+      }
+    });
+
+    /**
      * Set player turn (host only)
      */
     socket.on('set_player_turn', async (data) => {
@@ -326,4 +418,3 @@ module.exports = {
   activeConnections,
   roomConnections
 };
-
