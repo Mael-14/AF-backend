@@ -254,6 +254,106 @@ router.post('/:roomId/set-player-turn',
 );
 
 /**
+ * POST /api/rooms/:roomId/submit-vote
+ * Submit a vote for a question
+ */
+router.post('/:roomId/submit-vote',
+  authenticate,
+  [
+    body('questionId').notEmpty().withMessage('Question ID is required')
+  ],
+  async (req, res, next) => {
+    try {
+      const { roomId } = req.params;
+      const { questionId } = req.body;
+      const room = await roomService.getRoomById(roomId);
+
+      if (!room) {
+        return res.status(404).json({
+          success: false,
+          message: 'Room not found'
+        });
+      }
+
+      // Check if user is in the room
+      const isPlayer = room.players && room.players.some(p => p.userId === req.userId);
+      if (!isPlayer) {
+        return res.status(403).json({
+          success: false,
+          message: 'You are not a player in this room'
+        });
+      }
+
+      // Check if user is the current player turn (they shouldn't vote)
+      if (room.currentPlayerTurn === req.userId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Current player cannot vote'
+        });
+      }
+
+      const updatedRoom = await roomService.submitVote(roomId, req.userId, questionId);
+
+      res.json({
+        success: true,
+        room: updatedRoom
+      });
+    } catch (error) {
+      res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/rooms/:roomId/submit-answer
+ * Submit an answer (current player only)
+ */
+router.post('/:roomId/submit-answer',
+  authenticate,
+  [
+    body('answer').trim().notEmpty().withMessage('Answer is required'),
+    body('questionId').optional()
+  ],
+  async (req, res, next) => {
+    try {
+      const { roomId } = req.params;
+      const { answer, questionId } = req.body;
+      const room = await roomService.getRoomById(roomId);
+
+      if (!room) {
+        return res.status(404).json({
+          success: false,
+          message: 'Room not found'
+        });
+      }
+
+      // Check if user is the current player turn
+      if (room.currentPlayerTurn !== req.userId) {
+        return res.status(403).json({
+          success: false,
+          message: 'It is not your turn to answer'
+        });
+      }
+
+      const updatedRoom = await roomService.submitAnswer(roomId, req.userId, answer, questionId);
+
+      res.json({
+        success: true,
+        room: updatedRoom
+      });
+    } catch (error) {
+      res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+);
+
+/**
  * GET /api/rooms/user/my-rooms
  * Get user's rooms
  */
@@ -274,4 +374,6 @@ router.get('/user/my-rooms',
 );
 
 module.exports = router;
+
+
 
