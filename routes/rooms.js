@@ -5,6 +5,13 @@ const roomService = require('../services/roomService');
 const gameService = require('../services/gameService');
 const { authenticate } = require('../middleware/auth');
 
+// Get io instance from server
+let ioInstance = null;
+const setIOInstance = (io) => {
+  ioInstance = io;
+};
+const getIOInstance = () => ioInstance;
+
 /**
  * POST /api/rooms/create
  * Create a new room
@@ -71,6 +78,33 @@ router.post('/join/:code',
         username: req.user.displayName || req.user.username || 'Anonymous',
         avatar: req.user.photoURL || ''
       });
+
+      // If room is full and pending, auto-start the game
+      if (room.shouldAutoStart) {
+        try {
+          const updatedRoom = await roomService.startRoom(room.id);
+
+          // Broadcast game started event to all players in the room
+          const io = getIOInstance();
+          if (io) {
+            io.to(`room:${room.id}`).emit('game_started', {
+              room: updatedRoom,
+              questions: updatedRoom.questions || [],
+              currentPlayerTurn: updatedRoom.currentPlayerTurn,
+              round: updatedRoom.round || 1
+            });
+          }
+
+          return res.json({
+            success: true,
+            room: updatedRoom,
+            autoStarted: true
+          });
+        } catch (startError) {
+          console.error('Error auto-starting room:', startError);
+          // Continue with normal join response even if auto-start fails
+        }
+      }
 
       res.json({
         success: true,
@@ -147,7 +181,7 @@ router.get('/:roomId',
 
 /**
  * POST /api/rooms/:roomId/leave
- * Leave a room
+ * Leave a room (player can rejoin later)
  */
 router.post('/:roomId/leave',
   authenticate,
@@ -158,7 +192,73 @@ router.post('/:roomId/leave',
 
       res.json({
         success: true,
-        room
+        room,
+        message: 'You can rejoin this room from your session list'
+      });
+    } catch (error) {
+      res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+);
+
+/**
+ * DELETE /api/rooms/:roomId
+ * Delete/Terminate a room (host only)
+ */
+router.delete('/:roomId',
+  authenticate,
+  [
+    param('roomId').notEmpty().withMessage('Room ID is required')
+  ],
+  async (req, res, next) => {
+    try {
+      const { roomId } = req.params;
+      const room = await roomService.deleteRoom(roomId, req.userId);
+
+      // Broadcast room terminated event via Socket.IO
+      const io = getIOInstance();
+      if (io) {
+        io.to(`room:${roomId}`).emit('room_terminated', {
+          roomId: roomId,
+          message: 'Room has been deleted by the host'
+        });
+      }
+
+      res.json({
+        success: true,
+        room,
+        message: 'Room deleted successfully'
+      });
+    } catch (error) {
+      res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/rooms/:roomId/rejoin
+ * Rejoin a room that the user previously left
+ */
+router.post('/:roomId/rejoin',
+  authenticate,
+  async (req, res, next) => {
+    try {
+      const { roomId } = req.params;
+      const room = await roomService.rejoinRoom(roomId, req.userId, {
+        username: req.user.displayName || req.user.username || 'Anonymous',
+        avatar: req.user.photoURL || ''
+      });
+
+      res.json({
+        success: true,
+        room,
+        message: 'Successfully rejoined the room'
       });
     } catch (error) {
       res.status(400).json({
@@ -195,6 +295,16 @@ router.post('/:roomId/start',
       }
 
       const updatedRoom = await roomService.startRoom(roomId);
+
+      // Broadcast game started event to all players in the room
+      const io = getIOInstance();
+      if (io) {
+        io.to(`room:${roomId}`).emit('game_started', {
+          room: updatedRoom,
+          questions: updatedRoom.questions || [],
+          currentPlayerTurn: updatedRoom.currentPlayerTurn
+        });
+      }
 
       res.json({
         success: true,
@@ -273,5 +383,5 @@ router.get('/user/my-rooms',
   }
 );
 
-module.exports = router;
+module.exports = { router, setIOInstance };
 

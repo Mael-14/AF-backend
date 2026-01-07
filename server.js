@@ -44,7 +44,11 @@ const friendRoutes = require('./routes/friends');
 const sessionRoutes = require('./routes/sessions');
 
 app.use('/api/auth', authRoutes);
-app.use('/api/rooms', roomRoutes);
+// Set io instance for room routes to broadcast events
+if (roomRoutes.setIOInstance) {
+  roomRoutes.setIOInstance(io);
+}
+app.use('/api/rooms', roomRoutes.router || roomRoutes);
 app.use('/api/games', gameRoutes);
 app.use('/api/friends', friendRoutes);
 app.use('/api/sessions', sessionRoutes);

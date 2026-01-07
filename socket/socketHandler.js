@@ -77,19 +77,54 @@ const initialize = (io) => {
         }
         roomConnections.get(room.id).add(socket.id);
 
+        // Get fresh room data to check if it's full (in case player just joined via REST API)
+        const currentRoom = await roomService.getRoomById(room.id);
+        const isFull = currentRoom && currentRoom.players.length >= currentRoom.maxPlayers;
+        const isPending = currentRoom && currentRoom.status === 'pending';
+
         // Notify others in room
         socket.to(`room:${room.id}`).emit('player_joined', {
           userId: socket.userId,
           username: socket.user.displayName || socket.user.username,
-          room: room
+          room: currentRoom || room,
+          isFull: isFull
         });
 
+        // Auto-start if room is full and pending (backup check in case REST API didn't trigger it)
+        if (isFull && isPending && currentRoom) {
+          try {
+            const updatedRoom = await roomService.startRoom(room.id);
+
+            // Broadcast game started event to all players
+            io.to(`room:${room.id}`).emit('game_started', {
+              room: updatedRoom,
+              questions: updatedRoom.questions || [],
+              currentPlayerTurn: updatedRoom.currentPlayerTurn,
+              round: updatedRoom.round || 1
+            });
+
+            console.log(`🎮 Room ${roomCode} auto-started via Socket.IO - all players joined`);
+          } catch (error) {
+            console.error('Error auto-starting room via Socket.IO:', error);
+            // Room might already be started, which is fine
+          }
+        }
+
         // Send current room state to the joining user
+        // Make sure to include all room data including questions
         socket.emit('room_state', {
-          room: room,
+          room: {
+            ...room,
+            questions: room.questions || [],
+            votes: room.votes || {},
+            answers: room.answers || {}
+          },
           players: room.players,
           currentQuestion: room.currentQuestion,
-          currentPlayerTurn: room.currentPlayerTurn
+          currentPlayerTurn: room.currentPlayerTurn,
+          questions: room.questions || [],
+          votes: room.votes || {},
+          answers: room.answers || {}
         });
 
         console.log(`👤 ${socket.userId} joined room ${roomCode}`);
@@ -140,6 +175,12 @@ const initialize = (io) => {
           return;
         }
 
+        // Only the player whose turn it is can submit an answer
+        if (room.currentPlayerTurn !== socket.userId) {
+          socket.emit('error', { message: 'It is not your turn to answer' });
+          return;
+        }
+
         // Update room with answer
         const { getDb } = require('../services/firebaseService');
         const db = getDb();
@@ -156,15 +197,52 @@ const initialize = (io) => {
           updatedAt: new Date().toISOString()
         });
 
-        // Broadcast answer to all viewers
+        // Broadcast answer to all players in the room (including the submitter)
+        // Include the answer text directly for easy display
         io.to(`room:${roomId}`).emit('answer_submitted', {
           userId: socket.userId,
           username: socket.user.displayName || socket.user.username,
           answer: answer,
-          questionId: questionId
+          answerText: answer, // Explicit answer text for display
+          questionId: questionId,
+          playerTurn: room.currentPlayerTurn,
+          playerTurnId: room.currentPlayerTurn,
+          countdownStart: new Date().toISOString() // Timestamp for countdown start
         });
 
         console.log(`📝 ${socket.userId} submitted answer in room ${roomId}`);
+
+        // Broadcast countdown start event to viewers (20 seconds)
+        io.to(`room:${roomId}`).emit('viewer_countdown_start', {
+          duration: 20, // 20 seconds
+          startTime: new Date().toISOString()
+        });
+
+        // After 20 seconds, rotate to next turn (give time for viewers to see the answer)
+        setTimeout(async () => {
+          try {
+            const updatedRoom = await roomService.rotatePlayerTurn(roomId);
+            
+            if (updatedRoom.gameEnded) {
+              // Game ended
+              io.to(`room:${roomId}`).emit('game_ended', {
+                message: 'Game completed! All 10 rounds finished.',
+                room: updatedRoom
+              });
+            } else {
+              // Broadcast new turn with new questions
+              io.to(`room:${roomId}`).emit('turn_rotated', {
+                room: updatedRoom,
+                questions: updatedRoom.questions || [],
+                currentPlayerTurn: updatedRoom.currentPlayerTurn,
+                round: updatedRoom.round
+              });
+            }
+          } catch (error) {
+            console.error('Error rotating turn:', error);
+          }
+        }, 20000); // 20 second delay before rotating turn
+
       } catch (error) {
         console.error('Error submitting answer:', error);
         socket.emit('error', { message: error.message });
@@ -184,6 +262,12 @@ const initialize = (io) => {
           return;
         }
 
+        // Don't allow the player whose turn it is to vote
+        if (room.currentPlayerTurn === socket.userId) {
+          socket.emit('error', { message: 'You cannot vote - it is your turn to answer' });
+          return;
+        }
+
         // Update votes
         const { getDb } = require('../services/firebaseService');
         const db = getDb();
@@ -193,8 +277,10 @@ const initialize = (io) => {
           votes[questionId] = [];
         }
         
-        // Remove existing vote from this user
-        votes[questionId] = votes[questionId].filter(v => v.userId !== socket.userId);
+        // Remove existing vote from this user (they can change their vote)
+        Object.keys(votes).forEach(qId => {
+          votes[qId] = votes[qId].filter(v => v.userId !== socket.userId);
+        });
         
         // Add new vote
         votes[questionId].push({
@@ -214,11 +300,43 @@ const initialize = (io) => {
           voteCounts[qId] = votes[qId].length;
         });
 
+        // Get updated room to check voting completion
+        const updatedRoom = await roomService.getRoomById(roomId);
+        const votingPlayers = updatedRoom.players.filter(p => p.userId !== updatedRoom.currentPlayerTurn);
+        const totalVotes = Object.values(votes).reduce((sum, voteArray) => sum + voteArray.length, 0);
+        const votingComplete = totalVotes >= votingPlayers.length;
+
+        // Determine winning question if voting is complete
+        let winningQuestion = null;
+        if (votingComplete && Object.keys(voteCounts).length > 0) {
+          let maxVotes = 0;
+          let winningQuestionId = null;
+          Object.entries(voteCounts).forEach(([qId, count]) => {
+            if (count > maxVotes) {
+              maxVotes = count;
+              winningQuestionId = qId;
+            }
+          });
+          if (winningQuestionId && updatedRoom.questions) {
+            winningQuestion = updatedRoom.questions.find(q => q.id === winningQuestionId);
+          }
+        }
+
         // Broadcast vote update
         io.to(`room:${roomId}`).emit('vote_update', {
           voteCounts: voteCounts,
-          votes: votes
+          votes: votes,
+          votingComplete: votingComplete,
+          winningQuestion: winningQuestion
         });
+
+        // If voting is complete and winning question is determined, start countdown
+        if (votingComplete && winningQuestion) {
+          io.to(`room:${roomId}`).emit('question_selected', {
+            question: winningQuestion,
+            countdown: 60 // 60 seconds countdown
+          });
+        }
 
         console.log(`🗳️ ${socket.userId} voted for question ${questionId} in room ${roomId}`);
       } catch (error) {
