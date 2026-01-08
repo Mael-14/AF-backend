@@ -219,8 +219,19 @@ const initialize = (io) => {
         });
 
         // After 20 seconds, rotate to next turn (give time for viewers to see the answer)
-        setTimeout(async () => {
+        // Store timeout reference per room to prevent multiple timeouts
+        const timeoutKey = `turn_rotation_${roomId}`;
+        
+        // Clear any existing timeout for this room
+        if (global[timeoutKey]) {
+          clearTimeout(global[timeoutKey]);
+        }
+        
+        global[timeoutKey] = setTimeout(async () => {
           try {
+            // Clear the timeout reference
+            delete global[timeoutKey];
+            
             const updatedRoom = await roomService.rotatePlayerTurn(roomId);
             
             if (updatedRoom.gameEnded) {
@@ -237,9 +248,16 @@ const initialize = (io) => {
                 currentPlayerTurn: updatedRoom.currentPlayerTurn,
                 round: updatedRoom.round
               });
+              
+              // Also emit player_turn_changed for consistency
+              io.to(`room:${roomId}`).emit('player_turn_changed', {
+                playerId: updatedRoom.currentPlayerTurn,
+                room: updatedRoom
+              });
             }
           } catch (error) {
             console.error('Error rotating turn:', error);
+            delete global[timeoutKey];
           }
         }, 20000); // 20 second delay before rotating turn
 
@@ -444,4 +462,6 @@ module.exports = {
   activeConnections,
   roomConnections
 };
+
+
 
