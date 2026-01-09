@@ -440,7 +440,7 @@ const initialize = (io) => {
     });
 
     /**
-     * Share answer - Simple broadcast to other room members
+     * Share answer - Save answer, broadcast to viewers, and auto-rotate turn after countdown
      */
     socket.on('share_answer', async (data) => {
       try {
@@ -452,6 +452,12 @@ const initialize = (io) => {
           return;
         }
 
+        // Only the player whose turn it is can share an answer
+        if (room.currentPlayerTurn !== socket.userId) {
+          socket.emit('error', { message: 'It is not your turn to answer' });
+          return;
+        }
+
         // Check if user is in room
         const isPlayer = room.players.some(p => p.userId === socket.userId);
         if (!isPlayer) {
@@ -459,15 +465,83 @@ const initialize = (io) => {
           return;
         }
 
-        // Simple broadcast to all other members in the room (excluding sender)
-        socket.to(`room:${roomId}`).emit('answer_shared', {
+        // Update room with answer
+        const { getDb } = require('../services/firebaseService');
+        const db = getDb();
+        
+        const answers = room.answers || {};
+        answers[socket.userId] = {
+          answer: answer,
+          submittedAt: new Date().toISOString()
+        };
+
+        await db.collection('rooms').doc(roomId).update({
+          answers: answers,
+          updatedAt: new Date().toISOString()
+        });
+
+        // Broadcast answer to all players in the room (including the submitter)
+        io.to(`room:${roomId}`).emit('answer_shared', {
           userId: socket.userId,
           username: socket.user.displayName || socket.user.username,
           answer: answer,
+          answerText: answer,
+          playerTurn: room.currentPlayerTurn,
+          playerTurnId: room.currentPlayerTurn,
           timestamp: new Date().toISOString()
         });
 
         console.log(`📤 ${socket.userId} shared answer in room ${roomId}`);
+
+        // Broadcast countdown start event to viewers (30 seconds to match frontend)
+        io.to(`room:${roomId}`).emit('viewer_countdown_start', {
+          duration: 30, // 30 seconds to match frontend
+          startTime: new Date().toISOString()
+        });
+
+        // After 30 seconds, rotate to next turn (give time for viewers to see the answer)
+        // Store timeout reference per room to prevent multiple timeouts
+        const timeoutKey = `turn_rotation_${roomId}`;
+        
+        // Clear any existing timeout for this room
+        if (global[timeoutKey]) {
+          clearTimeout(global[timeoutKey]);
+        }
+        
+        global[timeoutKey] = setTimeout(async () => {
+          try {
+            // Clear the timeout reference
+            delete global[timeoutKey];
+            
+            const updatedRoom = await roomService.rotatePlayerTurn(roomId);
+            
+            if (updatedRoom.gameEnded) {
+              // Game ended
+              io.to(`room:${roomId}`).emit('game_ended', {
+                message: 'Game completed! All 10 rounds finished.',
+                room: updatedRoom
+              });
+            } else {
+              // Broadcast new turn with new questions
+              io.to(`room:${roomId}`).emit('turn_rotated', {
+                room: updatedRoom,
+                questions: updatedRoom.questions || [],
+                currentPlayerTurn: updatedRoom.currentPlayerTurn,
+                round: updatedRoom.round
+              });
+              
+              // Also emit player_turn_changed for consistency
+              io.to(`room:${roomId}`).emit('player_turn_changed', {
+                playerId: updatedRoom.currentPlayerTurn,
+                room: updatedRoom
+              });
+            }
+          } catch (error) {
+            console.error('Error rotating turn:', error);
+            delete global[timeoutKey];
+          }
+        }, 30000); // 30 second delay before rotating turn
+
       } catch (error) {
         console.error('Error sharing answer:', error);
         socket.emit('error', { message: error.message });
@@ -497,8 +571,4 @@ module.exports = {
   activeConnections,
   roomConnections
 };
-
-
-
-
 
