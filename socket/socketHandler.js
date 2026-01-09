@@ -440,6 +440,41 @@ const initialize = (io) => {
     });
 
     /**
+     * Share answer - Simple broadcast to other room members
+     */
+    socket.on('share_answer', async (data) => {
+      try {
+        const { roomId, answer } = data;
+        const room = await roomService.getRoomById(roomId);
+
+        if (!room) {
+          socket.emit('error', { message: 'Room not found' });
+          return;
+        }
+
+        // Check if user is in room
+        const isPlayer = room.players.some(p => p.userId === socket.userId);
+        if (!isPlayer) {
+          socket.emit('error', { message: 'You are not a member of this room' });
+          return;
+        }
+
+        // Simple broadcast to all other members in the room (excluding sender)
+        socket.to(`room:${roomId}`).emit('answer_shared', {
+          userId: socket.userId,
+          username: socket.user.displayName || socket.user.username,
+          answer: answer,
+          timestamp: new Date().toISOString()
+        });
+
+        console.log(`📤 ${socket.userId} shared answer in room ${roomId}`);
+      } catch (error) {
+        console.error('Error sharing answer:', error);
+        socket.emit('error', { message: error.message });
+      }
+    });
+
+    /**
      * Disconnect
      */
     socket.on('disconnect', () => {
@@ -462,6 +497,8 @@ module.exports = {
   activeConnections,
   roomConnections
 };
+
+
 
 
 
