@@ -188,7 +188,7 @@ router.post('/register', async (req, res, next) => {
  */
 router.put('/profile', authenticate, async (req, res, next) => {
   try {
-    const { displayName, username, photoURL } = req.body;
+    const { displayName, username, photoURL, about } = req.body;
     const { getDb } = require('../services/firebaseService');
     const db = getDb();
 
@@ -199,6 +199,7 @@ router.put('/profile', authenticate, async (req, res, next) => {
     if (displayName) updateData.displayName = displayName;
     if (username) updateData.username = username;
     if (photoURL) updateData.photoURL = photoURL;
+    if (about !== undefined) updateData.about = about;
 
     await db.collection('users').doc(req.userId).update(updateData);
 
@@ -214,4 +215,6 @@ router.put('/profile', authenticate, async (req, res, next) => {
 });
 
 module.exports = router;
+
+
 
