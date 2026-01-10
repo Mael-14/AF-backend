@@ -53,6 +53,11 @@ const initialize = (io) => {
      */
     socket.on('join_room', async (data) => {
       try {
+        if (!data || !data.roomCode) {
+          socket.emit('error', { message: 'Room code is required' });
+          return;
+        }
+
         const { roomCode } = data;
         const room = await roomService.getRoomByCode(roomCode);
 
@@ -61,8 +66,8 @@ const initialize = (io) => {
           return;
         }
 
-        // Check if user is in room
-        const isPlayer = room.players.some(p => p.userId === socket.userId);
+        // Check if user is in room (including inactive players)
+        const isPlayer = room.players && room.players.some(p => p && p.userId === socket.userId);
         if (!isPlayer) {
           socket.emit('error', { message: 'You are not a member of this room' });
           return;
@@ -444,6 +449,11 @@ const initialize = (io) => {
      */
     socket.on('share_answer', async (data) => {
       try {
+        if (!data || !data.roomId || !data.answer) {
+          socket.emit('error', { message: 'Room ID and answer are required' });
+          return;
+        }
+
         const { roomId, answer } = data;
         const room = await roomService.getRoomById(roomId);
 
@@ -459,7 +469,7 @@ const initialize = (io) => {
         }
 
         // Check if user is in room
-        const isPlayer = room.players.some(p => p.userId === socket.userId);
+        const isPlayer = room.players && room.players.some(p => p && p.userId === socket.userId);
         if (!isPlayer) {
           socket.emit('error', { message: 'You are not a member of this room' });
           return;
@@ -483,7 +493,7 @@ const initialize = (io) => {
         // Simple broadcast to all players in the room
         io.to(`room:${roomId}`).emit('answer_shared', {
           userId: socket.userId,
-          username: socket.user.displayName || socket.user.username,
+          username: socket.user?.displayName || socket.user?.username || 'Unknown',
           answer: answer,
           answerText: answer,
           timestamp: new Date().toISOString()
@@ -492,7 +502,7 @@ const initialize = (io) => {
         console.log(`📤 ${socket.userId} shared answer in room ${roomId}`);
       } catch (error) {
         console.error('Error sharing answer:', error);
-        socket.emit('error', { message: error.message });
+        socket.emit('error', { message: error.message || 'An error occurred while sharing answer' });
       }
     });
 
@@ -502,6 +512,12 @@ const initialize = (io) => {
     socket.on('next_turn', async (data) => {
       try {
         const { roomId } = data;
+        
+        if (!roomId) {
+          socket.emit('error', { message: 'Room ID is required' });
+          return;
+        }
+
         const room = await roomService.getRoomById(roomId);
 
         if (!room) {
@@ -509,14 +525,21 @@ const initialize = (io) => {
           return;
         }
 
-        // Only host can trigger next turn
-        if (room.hostId !== socket.userId) {
+        // Only host can trigger next turn - check both hostId and originalHostId
+        const isHost = room.hostId === socket.userId || room.originalHostId === socket.userId;
+        
+        if (!isHost) {
           socket.emit('error', { message: 'Only the host can move to the next turn' });
           return;
         }
 
         // Rotate to next turn
         const updatedRoom = await roomService.rotatePlayerTurn(roomId);
+        
+        if (!updatedRoom) {
+          socket.emit('error', { message: 'Failed to rotate turn' });
+          return;
+        }
         
         if (updatedRoom.gameEnded) {
           // Game ended
@@ -543,7 +566,7 @@ const initialize = (io) => {
         console.log(`🔄 Host rotated turn in room ${roomId}`);
       } catch (error) {
         console.error('Error rotating turn:', error);
-        socket.emit('error', { message: error.message });
+        socket.emit('error', { message: error.message || 'An error occurred while rotating turn' });
       }
     });
 
@@ -570,6 +593,8 @@ module.exports = {
   activeConnections,
   roomConnections
 };
+
+
 
 
 
