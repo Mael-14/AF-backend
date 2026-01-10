@@ -155,22 +155,43 @@ const joinRoom = async (code, playerData) => {
   
   // If player exists but is inactive, reactivate them
   if (existingPlayer && existingPlayer.isActive === false) {
+    // Check if this player was the original host (before host was reassigned)
+    const wasOriginalHost = existingPlayer.isHost === true || (room.originalHostId && room.originalHostId === playerData.userId);
+    
     room.players = room.players.map(p => {
       if (p.userId === playerData.userId) {
         return {
           ...p,
           isActive: true,
           rejoinedAt: new Date().toISOString(),
-          leftAt: null
+          leftAt: null,
+          isHost: wasOriginalHost // Restore host status if they were the original host
         };
+      }
+      // If rejoining player was original host, remove host status from current host
+      if (wasOriginalHost && p.isHost === true && p.userId !== playerData.userId) {
+        return { ...p, isHost: false };
       }
       return p;
     });
+    
+    // Restore hostId if rejoining player was original host
+    if (wasOriginalHost) {
+      room.hostId = playerData.userId;
+      // Clear originalHostId since host is back
+      room.originalHostId = null;
+    }
+    
     room.updatedAt = new Date().toISOString();
-    await db.collection(COLLECTIONS.ROOMS).doc(room.id).update({
+    const updateData = {
       players: room.players,
       updatedAt: room.updatedAt
-    });
+    };
+    if (wasOriginalHost) {
+      updateData.hostId = room.hostId;
+      updateData.originalHostId = null;
+    }
+    await db.collection(COLLECTIONS.ROOMS).doc(room.id).update(updateData);
     return room;
   }
 
@@ -234,9 +255,12 @@ const leaveRoom = async (roomId, userId) => {
 
   // If host leaves, assign new host from active players
   if (room.hostId === userId && activePlayers.length > 0) {
+    // Store original host ID before reassigning
+    const originalHostId = userId;
     const newHost = activePlayers.find(p => p.userId !== userId) || activePlayers[0];
     if (newHost) {
       room.hostId = newHost.userId;
+      room.originalHostId = originalHostId; // Store original host ID for rejoining
       room.players = room.players.map(p => {
         if (p.userId === newHost.userId) {
           return { ...p, isHost: true };
@@ -289,6 +313,9 @@ const rejoinRoom = async (roomId, userId, playerData) => {
   const existingPlayer = room.players.find(p => p.userId === userId);
   
   if (existingPlayer) {
+    // Check if this player was the original host (before host was reassigned)
+    const wasOriginalHost = existingPlayer.isHost === true || (room.originalHostId && room.originalHostId === userId);
+    
     // Reactivate the player
     room.players = room.players.map(p => {
       if (p.userId === userId) {
@@ -296,11 +323,23 @@ const rejoinRoom = async (roomId, userId, playerData) => {
           ...p,
           isActive: true,
           leftAt: null,
-          rejoinedAt: new Date().toISOString()
+          rejoinedAt: new Date().toISOString(),
+          isHost: wasOriginalHost // Restore host status if they were the original host
         };
+      }
+      // If rejoining player was original host, remove host status from current host
+      if (wasOriginalHost && p.isHost === true && p.userId !== userId) {
+        return { ...p, isHost: false };
       }
       return p;
     });
+    
+    // Restore hostId if rejoining player was original host
+    if (wasOriginalHost) {
+      room.hostId = userId;
+      // Clear originalHostId since host is back
+      room.originalHostId = null;
+    }
   } else {
     // Add as new player if not previously in room
     room.players.push({
@@ -315,10 +354,18 @@ const rejoinRoom = async (roomId, userId, playerData) => {
 
   room.updatedAt = new Date().toISOString();
 
-  await db.collection(COLLECTIONS.ROOMS).doc(roomId).update({
+  const updateData = {
     players: room.players,
     updatedAt: room.updatedAt
-  });
+  };
+  
+  // Only update hostId and originalHostId if they changed
+  if (existingPlayer && (existingPlayer.isHost === true || (room.originalHostId && room.originalHostId === userId))) {
+    updateData.hostId = room.hostId;
+    updateData.originalHostId = null;
+  }
+
+  await db.collection(COLLECTIONS.ROOMS).doc(roomId).update(updateData);
 
   return room;
 };
@@ -596,4 +643,6 @@ module.exports = {
   getUserRooms,
   generateRoomCode
 };
+
+
 
