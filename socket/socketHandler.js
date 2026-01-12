@@ -445,7 +445,7 @@ const initialize = (io) => {
     });
 
     /**
-     * Share answer - Simple broadcast to viewers (no automatic rotation)
+     * Share answer - Simple broadcast to viewers (similar to winning question display)
      */
     socket.on('share_answer', async (data) => {
       try {
@@ -475,28 +475,12 @@ const initialize = (io) => {
           return;
         }
 
-        // Update room with answer
-        const { getDb } = require('../services/firebaseService');
-        const db = getDb();
-        
-        const answers = room.answers || {};
-        answers[socket.userId] = {
-          answer: answer,
-          submittedAt: new Date().toISOString()
-        };
-
-        await db.collection('rooms').doc(roomId).update({
-          answers: answers,
-          updatedAt: new Date().toISOString()
-        });
-
-        // Simple broadcast to all players in the room
+        // Simple broadcast to all players in the room (no database update needed)
         io.to(`room:${roomId}`).emit('answer_shared', {
           userId: socket.userId,
           username: socket.user?.displayName || socket.user?.username || 'Unknown',
           answer: answer,
-          answerText: answer,
-          timestamp: new Date().toISOString()
+          playerTurn: room.currentPlayerTurn
         });
 
         console.log(`📤 ${socket.userId} shared answer in room ${roomId}`);
@@ -593,6 +577,8 @@ module.exports = {
   activeConnections,
   roomConnections
 };
+
+
 
 
 
